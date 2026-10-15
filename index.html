@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backend: роадмап</title>
+<meta name="description" content="Роадмап в backend — вкат или перекат. Выбираешь уровень, отмечаешь, что знаешь, и видишь, сколько осталось.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='6' fill='%23DFA94C' stroke='%2316130F' stroke-width='3'/%3E%3C/svg%3E">
+<!-- Telegram просит подключать до остальных скриптов. Вне Telegram он ничего не ломает. -->
+<script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=Montserrat:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+/*
+ * Стиль обучалок (src/shared/motion/theme.ts), переложенный на телефон:
+ * значения @1080 умножены примерно на 0.37. Цвета — те же токены.
+ * Тёмная тема Telegram — инверсия, как аутро обучалки.
+ */
+:root {
+  --paper: #F1EDE3;
+  --ink: #16130F;
+  --accent: #DFA94C;
+  --alarm: #C4552F;
+  --muted: #9A9287;
+
+  --bg: var(--paper);
+  --fg: var(--ink);
+  --line: #CFC7B4;
+  --inv-bg: var(--ink);
+  --inv-fg: var(--paper);
+
+  --display: 'Montserrat', system-ui, sans-serif;
+  --body: 'IBM Plex Sans', system-ui, sans-serif;
+
+  --slot: 52px;
+  --slot-radius: 10px;
+  --border: 2px;
+  --shadow: 4px 4px 0 var(--fg);
+  --gutter: 20px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: var(--ink);
+  --fg: var(--paper);
+  --line: rgba(241, 237, 227, 0.2);
+  --inv-bg: var(--paper);
+  --inv-fg: var(--ink);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 16px/1.4 var(--body);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+[hidden] { display: none !important; }
+
+/* Сетка, как фон перебивок: шаг 24 @1080, 5 % чернил. */
+.grid-bg {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(var(--fg) 1px, transparent 1px),
+    linear-gradient(90deg, var(--fg) 1px, transparent 1px);
+  background-size: 10px 10px;
+  opacity: 0.05;
+}
+
+.wrap {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: calc(28px + var(--safe-top)) var(--gutter) calc(32px + var(--safe-bottom));
+}
+
+.kicker, .data-label {
+  font: 700 11px/1.2 var(--display);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.data-label { font-size: 10.5px; letter-spacing: 0.16em; }
+.title {
+  margin: 0;
+  font: 900 clamp(38px, 11.5vw, 56px)/0.92 var(--display);
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+}
+.lead { margin: 0; font: 400 16px/1.4 var(--body); }
+.readout {
+  font: 900 30px/1 var(--display);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Шапка ─────────────────────────────────────────── */
+.hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.badge {
+  background: var(--fg); color: var(--bg);
+  font: 800 11px/1 var(--display);
+  letter-spacing: 0.16em; text-transform: uppercase;
+  padding: 7px 10px; border-radius: 5px;
+  white-space: nowrap;
+}
+.rule { width: 64px; height: 4px; background: var(--accent); margin-top: 20px; }
+.hero .title { margin-top: 12px; }
+/* «BACKEND» печатается по букве, как в терминале. Буквы стоят на местах с самого
+   начала, только скрыты — строка не прыгает и переносится так же, как без анимации. */
+.type .ch { visibility: hidden; }
+.type .ch.on { visibility: visible; }
+.caret { display: inline-block; position: relative; width: 0; height: 1em; }
+.caret::after {
+  content: '';
+  position: absolute; left: 0.05em; bottom: 0;
+  width: 0.42em; height: 0.72em;
+  background: var(--accent);
+}
+/* Допечатал — каретка мигает три раза и гаснет. */
+.caret.blink::after { animation: caret-blink 800ms steps(1) 3 forwards; }
+@keyframes caret-blink { 50%, 100% { opacity: 0; } }
+.hero .lead { margin-top: 12px; min-height: 4.2em; }
+
+/* ── Уровень ───────────────────────────────────────── */
+.levels { display: flex; gap: 10px; margin-top: 20px; }
+.level-btn {
+  flex: 1;
+  font: 800 13px/1 var(--display);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 13px 4px 12px;
+  border: var(--border) solid var(--fg);
+  border-radius: 8px;
+  box-shadow: 3px 3px 0 var(--fg);
+  background: var(--bg);
+  transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out), background-color 160ms var(--ease-out);
+}
+/* Выбранный — вдавлен и залит, как включённый слот. */
+.level-btn[aria-checked="true"] {
+  background: var(--accent); color: var(--ink);
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 var(--fg);
+}
+.level-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* ── Прогресс ──────────────────────────────────────── */
+.progress { margin-top: 28px; }
+.progress-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.meter {
+  margin-top: 10px;
+  height: 14px;
+  border: var(--border) solid var(--fg);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  background-clip: padding-box;
+  border-right: var(--border) solid var(--fg);
+  transition: width 420ms var(--ease-out);
+}
+.meter-fill[data-empty] { border-right-color: transparent; }
+.stats { margin-top: 14px; display: flex; gap: 10px; }
+.stat { flex: 1; }
+.stat b { display: block; font: 900 20px/1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat span { display: block; margin-top: 4px; font: 400 12px/1.25 var(--body); opacity: 0.72; }
+
+/* ── Дорога ────────────────────────────────────────── */
+.road { list-style: none; margin: 34px 0 0; padding: 0; }
+.road.swap { animation: rise 280ms var(--ease-out); }
+.stage { position: relative; padding-bottom: 18px; }
+/* Линия к следующему этапу: пунктир, пока этап не закрыт. */
+.stage:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--slot) / 2 - 1px);
+  top: calc(var(--slot) + 6px);
+  bottom: 6px;
+  width: 0;
+  border-left: 2px dashed var(--line);
+}
+.stage[data-state="done"]:not(:last-child)::before { border-left: 2px solid var(--fg); }
+/* Параллельный трек не ведёт к следующему этапу — он идёт рядом со всеми. */
+.stage-parallel { padding-bottom: 26px; }
+.stage.stage-parallel::before { display: none; }
+
+.stage-head {
+  display: flex; align-items: center; gap: 14px;
+  width: 100%; text-align: left;
+  min-height: var(--slot);
+}
+.stage-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+
+.slot {
+  position: relative; flex: none;
+  width: var(--slot); height: var(--slot);
+  border: var(--border) solid var(--fg);
+  border-radius: var(--slot-radius);
+  box-shadow: var(--shadow);
+  background: var(--bg);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 260ms var(--ease-out);
+}
+/* Слот наполняется снизу по доле пройденного — как метр в перебивке.
+   Номер продублирован внутри заливки чернилами: на горчице он читается и в тёмной теме. */
+.slot .fill {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: calc(var(--p, 0) * 100%);
+  background: var(--accent);
+  overflow: hidden;
+  transition: height 420ms var(--ease-out);
+}
+.slot .n {
+  font: 900 20px/1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+}
+.slot .fill .n {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: calc(var(--slot) - 2 * var(--border));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink);
+}
+/* Знак параллельности вместо номера. */
+.slot .n-par { display: flex; gap: 6px; align-items: center; justify-content: center; }
+.n-par i { display: block; width: 4px; height: 20px; background: currentColor; }
+/* Закрытый этап — наклейка, положенная с доворотом. */
+.stage[data-state="done"] .slot { transform: rotate(-4deg); }
+.slot.stamp { animation: stamp 360ms var(--ease-out); }
+@keyframes stamp {
+  0% { transform: scale(1) rotate(0deg); }
+  45% { transform: scale(1.14) rotate(-9deg); }
+  100% { transform: scale(1) rotate(-4deg); }
+}
+
+.stage-text { flex: 1; min-width: 0; }
+.stage-title {
+  display: block;
+  font: 900 19px/1.05 var(--display);
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+.stage-meta { display: block; margin-top: 5px; }
+
+.chev {
+  flex: none; position: relative; width: 22px; height: 22px;
+}
+.chev::before, .chev::after {
+  content: ''; position: absolute; left: 4px; right: 4px; top: 10px; height: 2px; background: var(--fg);
+  transition: transform 240ms var(--ease-out);
+}
+.chev::after { transform: rotate(90deg); }
+.stage.open .chev::after { transform: rotate(0deg); }
+
+.stage-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms var(--ease-out);
+}
+.stage.open .stage-body { grid-template-rows: 1fr; }
+.stage-inner {
+  overflow: hidden; min-height: 0;
+  padding-left: calc(var(--slot) + 14px);
+}
+.stage-inner > :first-child { margin-top: 14px; }
+.stage-inner > :last-child { margin-bottom: 8px; }
+.stage-note { margin: 0 0 4px; font: 600 14px/1.35 var(--body); }
+
+/* ── Темы ──────────────────────────────────────────── */
+.topics { list-style: none; margin: 0; padding: 0; }
+.topic {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 9px 0;
+  cursor: pointer;
+}
+.topic input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.box {
+  flex: none; position: relative;
+  width: 24px; height: 24px; margin-top: 1px;
+  border: var(--border) solid var(--fg);
+  border-radius: 6px;
+  box-shadow: 2px 2px 0 var(--fg);
+  background: var(--bg);
+  transition: background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.box svg { position: absolute; inset: 2px; width: 16px; height: 16px; }
+.box path {
+  fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: square;
+  stroke-dasharray: 24; stroke-dashoffset: 24;
+  transition: stroke-dashoffset 200ms var(--ease-out);
+}
+.topic input:checked + .box { background: var(--accent); transform: rotate(-4deg); }
+.topic input:checked + .box path { stroke-dashoffset: 0; }
+.topic input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 3px; }
+.topic-text { flex: 1; min-width: 0; font-size: 15px; line-height: 1.4; }
+.topic-text b { font-weight: 600; }
+.topic-text .d { opacity: 0.72; }
+.topic input:checked ~ .topic-text { opacity: 0.55; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tag {
+  font: 700 9.5px/1 var(--display);
+  letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 5px 7px 4px;
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.tag-reel { border-color: var(--fg); color: var(--fg); }
+a.tag-reel:active { background: var(--accent); color: var(--ink); }
+
+/* ── Вопрос с собеса ───────────────────────────────── */
+.q {
+  margin-top: 12px;
+  border: var(--border) solid var(--fg);
+  border-radius: var(--slot-radius);
+  box-shadow: var(--shadow);
+  background: var(--bg);
+  padding: 14px 14px 12px;
+}
+.q-text { margin: 8px 0 0; font: 800 17px/1.25 var(--display); }
+.q-btn {
+  margin-top: 12px;
+  font: 800 12px/1 var(--display);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 9px 12px;
+  background: var(--fg); color: var(--bg);
+  border-radius: 5px;
+}
+.q-answer { margin: 12px 0 0; font-size: 15px; line-height: 1.45; }
+.q.revealed .q-btn { display: none; }
+.q.revealed .q-answer { animation: rise 260ms var(--ease-out); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ── Финал, инверсный, как аутро ───────────────────── */
+.outro {
+  margin-top: 26px;
+  background: var(--inv-bg);
+  color: var(--inv-fg);
+  border-radius: var(--slot-radius);
+  padding: 24px 20px 22px;
+}
+.outro .title { font-size: clamp(30px, 8.6vw, 40px); margin-top: 12px; }
+.outro .lead { margin-top: 12px; }
+.actions { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 20px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 800 15px/1 var(--display);
+  padding: 14px 16px;
+  border-radius: 6px;
+  text-decoration: none;
+  transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+.btn-primary { background: var(--accent); color: var(--ink); box-shadow: 4px 4px 0 var(--inv-fg); }
+.btn-primary:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--inv-fg); }
+.btn-ghost { border: var(--border) solid var(--inv-fg); color: var(--inv-fg); }
+.btn-ghost:active { background: var(--inv-fg); color: var(--inv-bg); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.foot { margin-top: 22px; font-size: 12.5px; line-height: 1.45; opacity: 0.72; }
+.foot p { margin: 0; }
+.link-btn { margin-top: 10px; text-decoration: underline; text-underline-offset: 3px; font-size: 12.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<main class="wrap">
+  <header class="hero">
+    <div class="hero-top">
+      <span class="kicker">Вкат или перекат</span>
+      <span class="badge">Роадмап</span>
+    </div>
+    <div class="rule"></div>
+    <h1 class="title" aria-label="Backend"><span class="type" id="typeWord" data-text="backend" aria-hidden="true"></span></h1>
+    <p class="lead" id="lead"></p>
+    <div class="levels" id="levels" role="radiogroup" aria-label="Уровень"></div>
+  </header>
+
+  <section class="progress" aria-live="polite">
+    <div class="progress-row">
+      <span class="data-label" id="pctLabel">Готовность к собесу</span>
+      <span class="readout" id="pct">0%</span>
+    </div>
+    <div class="meter" role="progressbar" aria-labelledby="pctLabel" aria-valuemin="0" aria-valuemax="100" id="meter">
+      <div class="meter-fill" id="meterFill" data-empty></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="stagesDone">—</b><span>этапов закрыто</span></div>
+      <div class="stat"><b id="topicsLeft">—</b><span>тем осталось</span></div>
+    </div>
+  </section>
+
+  <ol class="road" id="road"></ol>
+
+  <section class="outro">
+    <div class="kicker">Финиш</div>
+    <h2 class="title">Проверь себя на мок-собесе</h2>
+    <p class="lead">Теория разваливается на втором «а почему?». Мок покажет дыры до настоящего собеса, а не на нём.</p>
+    <div class="actions">
+      <a class="btn btn-primary" id="mockBtn" href="#">Записаться на мок →</a>
+      <a class="btn btn-ghost" id="shareBtn" href="#">Поделиться роадмапом</a>
+      <a class="btn btn-ghost" id="channelBtn" href="#" hidden>Тг-канал с разборами</a>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p id="footNote"></p>
+    <button class="link-btn" id="resetBtn" type="button">Сбросить прогресс</button>
+  </footer>
+</main>
+
+<script src="data.js"></script>
+<script>
+(() => {
+  const {config: C, levels: LEVELS, stages: STAGES} = window.ROADMAP;
+  const tg = window.Telegram && window.Telegram.WebApp;
+  // Вне Telegram скрипт тоже создаёт WebApp, но с пустым initData.
+  const inTg = !!(tg && tg.initData);
+  const can = (v) => inTg && typeof tg.isVersionAtLeast === 'function' && tg.isVersionAtLeast(v);
+
+  const KEY = 'roadmap_v1';
+  const PAPER = '#F1EDE3';
+  const INK = '#16130F';
+  const LEVEL_TAG = {s: 'сеньор'};
+  const done = new Set();
+  let level = LEVELS[0].id;
+  const levelInfo = () => LEVELS.find((l) => l.id === level);
+  const $ = (id) => document.getElementById(id);
+
+  /* ── Тема ─────────────────────────────────────────── */
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const dark = inTg ? tg.colorScheme === 'dark' : media.matches;
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    const bg = dark ? INK : PAPER;
+    if (can('6.9')) { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); }
+    if (can('7.10')) tg.setBottomBarColor(bg);
+  }
+
+  /* ── Хранилище: облако Telegram, копия в localStorage ── */
+  function readLocal() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function load() {
+    return new Promise((resolve) => {
+      const local = readLocal();
+      if (!can('6.9')) return resolve(local);
+      const timer = setTimeout(() => resolve(local), 1500);
+      tg.CloudStorage.getItem(KEY, (err, value) => {
+        clearTimeout(timer);
+        resolve(!err && value ? value : local);
+      });
+    });
+  }
+  function save() {
+    const value = JSON.stringify({v: 1, done: [...done], level});
+    try { localStorage.setItem(KEY, value); } catch (e) {}
+    if (can('6.9')) tg.CloudStorage.setItem(KEY, value);
+  }
+
+  /* ── Отклик ───────────────────────────────────────── */
+  function haptic(kind, style) {
+    if (!can('6.1')) return;
+    const h = tg.HapticFeedback;
+    if (kind === 'impact') h.impactOccurred(style);
+    else if (kind === 'notify') h.notificationOccurred(style);
+    else if (kind === 'select') h.selectionChanged();
+  }
+
+  function openLink(url) {
+    if (inTg && /^https:\/\/t\.me\//.test(url)) tg.openTelegramLink(url);
+    else if (inTg) tg.openLink(url);
+    else window.open(url, '_blank', 'noopener');
+  }
+
+  /* ── Что видно на уровне ──────────────────────────── */
+  const lvOf = (t, s) => t.lv || s.lv || 'ms';
+  const topicsOf = (s) => s.topics.filter((t) => lvOf(t, s).includes(level));
+  const questionsOf = (s) => [].concat(s.q || []).filter((q) => (q.lv || s.lv || 'ms').includes(level));
+  const visibleStages = () => STAGES.filter((s) => topicsOf(s).length);
+
+  /* ── Счёт ─────────────────────────────────────────── */
+  function stageProgress(s) {
+    const pool = topicsOf(s);
+    const n = pool.filter((t) => done.has(t.id)).length;
+    return {n, total: pool.length, p: pool.length ? n / pool.length : 0};
+  }
+  function totals() {
+    let n = 0, total = 0, stagesDone = 0;
+    const stages = visibleStages();
+    for (const s of stages) {
+      const sp = stageProgress(s);
+      n += sp.n;
+      total += sp.total;
+      if (sp.p === 1) stagesDone++;
+    }
+    return {
+      pct: total ? Math.round((n / total) * 100) : 0,
+      left: total - n,
+      stagesDone, stagesTotal: stages.length,
+    };
+  }
+
+  /* ── Разметка ─────────────────────────────────────── */
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === 'text') node.textContent = v;
+      else if (k === 'class') node.className = v;
+      else node.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of [].concat(children || [])) if (c) node.append(c);
+    return node;
+  }
+  const CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8.5l3.5 3.5 7.5-8"/></svg>';
+
+  function renderTopic(t, stage) {
+    const box = el('span', {class: 'box'});
+    box.innerHTML = CHECK;
+    const tags = [];
+    // Метка «сеньор» — у тем только для сеньора: в его списке видно, что добавилось к мидлу.
+    const tagLevel = t.lv && LEVEL_TAG[t.lv[0]];
+    if (tagLevel) tags.push(el('span', {class: 'tag', text: tagLevel}));
+    if (t.reel) {
+      tags.push(C.profile
+        ? el('a', {class: 'tag tag-reel', href: C.profile, 'data-link': C.profile, text: '▶ разбор в рилсах'})
+        : el('span', {class: 'tag tag-reel', text: '▶ разбор в рилсах'}));
+    }
+    const text = el('span', {class: 'topic-text'}, [
+      el('b', {text: t.t}),
+      el('span', {class: 'd', text: ' — ' + t.d}),
+      tags.length ? el('span', {class: 'tags'}, tags) : null,
+    ]);
+    const input = el('input', {type: 'checkbox', 'data-topic': t.id});
+    input.checked = done.has(t.id);
+    return el('li', {}, el('label', {class: 'topic'}, [input, box, text]));
+  }
+
+  function slotMark(num) {
+    return num
+      ? el('span', {class: 'n', text: num})
+      : el('span', {class: 'n n-par', title: 'параллельно'}, [el('i'), el('i')]);
+  }
+
+  function renderStage(s, num) {
+    const bodyId = 'body-' + s.id;
+    const head = el('button', {class: 'stage-head', type: 'button', 'aria-expanded': 'false', 'aria-controls': bodyId}, [
+      el('span', {class: 'slot'}, [
+        slotMark(num),
+        el('span', {class: 'fill', 'aria-hidden': 'true'}, slotMark(num)),
+      ]),
+      el('span', {class: 'stage-text'}, [
+        el('span', {class: 'stage-title', text: s.title}),
+        el('span', {class: 'stage-meta data-label'}),
+      ]),
+      el('span', {class: 'chev', 'aria-hidden': 'true'}),
+    ]);
+    const qs = questionsOf(s);
+    const questions = qs.map((item, k) => el('div', {class: 'q'}, [
+      el('div', {class: 'kicker', text: 'Спросят на собесе' + (qs.length > 1 ? ` · ${k + 1}/${qs.length}` : '')}),
+      el('p', {class: 'q-text', text: item.q}),
+      el('button', {class: 'q-btn', type: 'button', text: 'Показать ответ'}),
+      el('p', {class: 'q-answer', hidden: true, text: item.a}),
+    ]));
+    const inner = el('div', {class: 'stage-inner'}, [
+      s.note ? el('p', {class: 'stage-note', text: s.note}) : null,
+      el('ul', {class: 'topics'}, topicsOf(s).map((t) => renderTopic(t, s))),
+      ...questions,
+    ]);
+    return el('li', {class: 'stage' + (s.parallel ? ' stage-parallel' : ''), id: 'stage-' + s.id, 'data-id': s.id}, [
+      head,
+      el('div', {class: 'stage-body', id: bodyId, role: 'region'}, inner),
+    ]);
+  }
+
+  /* ── Обновление ───────────────────────────────────── */
+  const road = $('road');
+  let stateOf = {};
+
+  function metaText(s, n, total) {
+    return (s.parallel ? 'параллельно со всем · ' : '') + `${n}/${total}`;
+  }
+
+  function updateStage(s, {animate} = {}) {
+    const li = $('stage-' + s.id);
+    const {n, total, p} = stageProgress(s);
+    const state = p === 1 ? 'done' : n > 0 ? 'part' : 'todo';
+    const slot = li.querySelector('.slot');
+    slot.style.setProperty('--p', p);
+    li.querySelector('.stage-meta').textContent = metaText(s, n, total);
+    if (animate && state === 'done' && stateOf[s.id] !== 'done') {
+      slot.classList.remove('stamp');
+      void slot.offsetWidth;
+      slot.classList.add('stamp');
+      haptic('notify', 'success');
+    }
+    li.dataset.state = state;
+    stateOf[s.id] = state;
+  }
+
+  function updateTotals() {
+    const t = totals();
+    $('pctLabel').textContent = 'Готовность к собесу ' + levelInfo().who;
+    $('pct').textContent = t.pct + '%';
+    const fill = $('meterFill');
+    fill.style.width = t.pct + '%';
+    fill.toggleAttribute('data-empty', t.pct === 0 || t.pct === 100);
+    $('meter').setAttribute('aria-valuenow', t.pct);
+    $('stagesDone').textContent = `${t.stagesDone}/${t.stagesTotal}`;
+    $('topicsLeft').textContent = t.left;
+    $('mockBtn').dataset.pct = t.pct;
+  }
+
+  function setOpen(li, open) {
+    li.classList.toggle('open', open);
+    li.querySelector('.stage-head').setAttribute('aria-expanded', String(open));
+  }
+
+  /** Перестроить дорогу под уровень. Открытые этапы, которые остались видны, остаются открытыми. */
+  function renderRoad({keepOpen = true, animate = false} = {}) {
+    const open = keepOpen ? new Set([...road.querySelectorAll('.stage.open')].map((li) => li.dataset.id)) : new Set();
+    road.textContent = '';
+    stateOf = {};
+    let num = 0;
+    const stages = visibleStages();
+    for (const s of stages) road.append(renderStage(s, s.parallel ? null : String(++num).padStart(2, '0')));
+    stages.forEach((s) => updateStage(s));
+    let any = false;
+    for (const s of stages) if (open.has(s.id)) { setOpen($('stage-' + s.id), true); any = true; }
+    if (!any) {
+      const first = stages.find((s) => !s.parallel && stageProgress(s).p < 1);
+      if (first) setOpen($('stage-' + first.id), true);
+    }
+    if (animate) {
+      road.classList.remove('swap');
+      void road.offsetWidth;
+      road.classList.add('swap');
+    }
+  }
+
+  function applyLevelText() {
+    $('lead').textContent = levelInfo().lead;
+  }
+
+  /* ── Уровень ──────────────────────────────────────── */
+  const levelsEl = $('levels');
+  LEVELS.forEach((l) => levelsEl.append(el('button', {class: 'level-btn', type: 'button', role: 'radio', 'data-level': l.id, text: l.label})));
+
+  function syncLevelButtons() {
+    levelsEl.querySelectorAll('.level-btn').forEach((b) => {
+      const on = b.dataset.level === level;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+  function setLevel(id, {animate = false} = {}) {
+    level = id;
+    syncLevelButtons();
+    applyLevelText();
+    renderRoad({animate});
+    updateTotals();
+  }
+  function pickLevel(id) {
+    if (id === level) return;
+    setLevel(id, {animate: true});
+    haptic('select');
+    save();
+  }
+  levelsEl.addEventListener('click', (e) => {
+    const b = e.target.closest('.level-btn');
+    if (b) pickLevel(b.dataset.level);
+  });
+  levelsEl.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const i = LEVELS.findIndex((l) => l.id === level);
+    const next = LEVELS[(i + step + LEVELS.length) % LEVELS.length].id;
+    pickLevel(next);
+    levelsEl.querySelector(`[data-level="${next}"]`).focus();
+  });
+
+  /* ── События ──────────────────────────────────────── */
+  road.addEventListener('click', (e) => {
+    const link = e.target.closest('[data-link]');
+    if (link) { e.preventDefault(); openLink(link.dataset.link); return; }
+
+    const head = e.target.closest('.stage-head');
+    if (head) {
+      const li = head.closest('.stage');
+      setOpen(li, !li.classList.contains('open'));
+      haptic('impact', 'light');
+      return;
+    }
+    const qBtn = e.target.closest('.q-btn');
+    if (qBtn) {
+      const q = qBtn.closest('.q');
+      q.classList.add('revealed');
+      q.querySelector('.q-answer').hidden = false;
+      haptic('impact', 'soft');
+    }
+  });
+
+  road.addEventListener('change', (e) => {
+    const input = e.target.closest('input[data-topic]');
+    if (!input) return;
+    const id = input.dataset.topic;
+    input.checked ? done.add(id) : done.delete(id);
+    haptic('impact', input.checked ? 'medium' : 'light');
+    const s = STAGES.find((st) => st.topics.some((t) => t.id === id));
+    updateStage(s, {animate: true});
+    updateTotals();
+    save();
+  });
+
+  $('mockBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    const text = C.mockText
+      .replace('{level}', levelInfo().who)
+      .replace('{p}', e.currentTarget.dataset.pct || '0');
+    openLink(`https://t.me/${C.mockUser}?text=${encodeURIComponent(text)}`);
+  });
+
+  $('shareBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    const url = C.shareUrl || location.href.split('#')[0];
+    openLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(C.shareText)}`);
+  });
+
+  const channelBtn = $('channelBtn');
+  if (C.channel) {
+    channelBtn.hidden = false;
+    channelBtn.addEventListener('click', (e) => { e.preventDefault(); openLink(C.channel); });
+  }
+
+  function resetAll() {
+    done.clear();
+    renderRoad({keepOpen: false});
+    updateTotals();
+    save();
+  }
+  $('resetBtn').addEventListener('click', () => {
+    const question = 'Сбросить все отметки?';
+    if (can('6.2')) tg.showConfirm(question, (ok) => ok && resetAll());
+    else if (window.confirm(question)) resetAll();
+  });
+
+  /* ── Печать заголовка ─────────────────────────────── */
+  function typeTitle() {
+    const host = $('typeWord');
+    const letters = [...host.dataset.text].map((ch) => el('span', {class: 'ch', text: ch}));
+    host.append(...letters);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      letters.forEach((l) => l.classList.add('on'));
+      return;
+    }
+    const caret = el('span', {class: 'caret'});
+    host.prepend(caret);
+    let i = 0;
+    const tick = () => {
+      letters[i].classList.add('on');
+      letters[i].after(caret);
+      i++;
+      if (i < letters.length) setTimeout(tick, 110);
+      else caret.classList.add('blink');
+    };
+    // Ждём шрифт, чтобы не печатать системным и не перескакивать на Montserrat посреди слова.
+    const fonts = document.fonts ? document.fonts.ready : Promise.resolve();
+    Promise.race([fonts, new Promise((r) => setTimeout(r, 800))]).then(() => setTimeout(tick, 350));
+  }
+
+  /* ── Старт ────────────────────────────────────────── */
+  $('footNote').textContent = inTg ? 'Отметки хранятся в твоём Telegram.' : 'Отметки хранятся в этом браузере.';
+  typeTitle();
+  applyTheme();
+  if (inTg) {
+    tg.ready();
+    tg.expand();
+    if (can('7.7')) tg.disableVerticalSwipes();
+    tg.onEvent('themeChanged', applyTheme);
+  } else {
+    media.addEventListener('change', applyTheme);
+  }
+
+  load().then((raw) => {
+    let saved = null;
+    try { saved = raw ? JSON.parse(raw) : null; } catch (e) {}
+    if (saved && Array.isArray(saved.done)) saved.done.forEach((id) => done.add(id));
+    if (saved && LEVELS.some((l) => l.id === saved.level)) level = saved.level;
+
+    // Ссылка с параметром: t.me/<бот>/<app>?startapp=senior или =db; в браузере — #senior, #db.
+    const start = (inTg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || location.hash.slice(1);
+    const startLevel = LEVELS.find((l) => l.key === start);
+    if (startLevel) level = startLevel.id;
+
+    setLevel(level);
+
+    const target = visibleStages().find((s) => s.id === start);
+    if (target) {
+      const li = $('stage-' + target.id);
+      setOpen(li, true);
+      li.scrollIntoView({block: 'start'});
+    }
+  });
+})();
+</script>
+</body>
+</html>
